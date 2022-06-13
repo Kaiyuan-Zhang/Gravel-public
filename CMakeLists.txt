@@ -1,20 +1,15 @@
-cmake_minimum_required (VERSION 2.8)
+cmake_minimum_required (VERSION 3.16)
 project (Cobble)
 set (Cobble_VERSION_MAJOR 0)
 set (Cobble_VERSION_MINOR 2)
 set (CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# find_package(SWIG REQUIRED)
-# include(${SWIG_USE_FILE})
+
 find_package(Z3 REQUIRED CONFIG)
 find_package(LLVM REQUIRED CONFIG)
-#find_package(Python3 REQUIRED Development)
-find_package(PythonLibs 3 REQUIRED)
+find_package(Python 3.8 REQUIRED Development)
 
-link_directories("/usr/lib/")
-
-# find_package(PythonLibs)
-# include_directories(${PYTHON_INCLUDE_PATH})
+include_directories(${Python_INCLUDE_DIRS})
 
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
@@ -41,13 +36,13 @@ add_library(cobbleso SHARED ${LIB_SRC})
 target_link_libraries(cobble z3)
 target_link_libraries(cobble "-L/usr/lib -lz3")
 target_link_libraries(cobble ${llvm_libs})
-target_link_libraries(cobble ${PYTHON_LIBRARY})
+target_link_libraries(cobble ${Python_LIBRARIES})
 target_link_libraries(cobble elf)
 
 target_link_libraries(cobbleso z3)
 target_link_libraries(cobbleso "-L/usr/lib -lz3")
 target_link_libraries(cobbleso ${llvm_libs})
-target_link_libraries(cobbleso ${PYTHON_LIBRARY})
+target_link_libraries(cobbleso ${Python_LIBRARIES})
 target_link_libraries(cobbleso elf)
 
 

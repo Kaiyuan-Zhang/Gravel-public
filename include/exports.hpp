@@ -25,6 +25,7 @@ extern "C" {
     void *bv_div(void *lhs, void *rhs);
     void *bv_mod(void *lhs, void *rhs);
     void *bv_urem(void *lhs, void *rhs);
+    void *bv_and(void *lhs, void *rhs);
 
     void *bv_concat(void *lhs, void *rhs);
     void *bv_extract(void *v, int start, int end);

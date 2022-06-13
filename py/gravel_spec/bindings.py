@@ -21,6 +21,7 @@ funcs = [
     ('bv_div',          [c_void_p, c_void_p],            c_void_p),
     ('bv_mod',          [c_void_p, c_void_p],            c_void_p),
     ('bv_urem',         [c_void_p, c_void_p],            c_void_p),
+    ('bv_and',          [c_void_p, c_void_p],            c_void_p),
     ('bv_concat',       [c_void_p, c_void_p],            c_void_p),
     ('bv_extract',      [c_void_p, c_int, c_int],        c_void_p),
     ('bv_extend_to',    [c_void_p, c_int, c_bool],       c_void_p),
@@ -599,6 +600,12 @@ class CobbleMap(CobbleAbsType):
                 *key_sizes, *val_sizes)
         self.ptr = c_void_p(self.ptr)
 
+    def convert_key(self, key):
+        if 'inner' in dir(key):
+            return key.inner()
+        else:
+            return key
+
 
     def get_val(self, keys):
         assert len(keys) == len(self.key_sizes)
@@ -620,17 +627,21 @@ class CobbleMap(CobbleAbsType):
         self.set_val(keys, old_vals)
 
     def has_key(self, keys):
-        if len(keys) != len(self.key_sizes):
-            print("key size mis-match: {} {} vs {}".format(self, keys, self.key_sizes))
-        assert len(keys) == len(self.key_sizes)
-        keys = list(map(_get_inner, keys))
-        result = self.lib.abs_hashmap_contains(self.ptr, *map(_to_void_p, keys))
+        key_list = keys
+        if '__iter__' not in dir(keys):
+            key_list = [keys]
+        key_list = list(map(lambda k: self.convert_key(k), key_list))
+        if len(key_list) != len(self.key_sizes):
+            print("key size mis-match: {} {} vs {}".format(self, key_list, self.key_sizes))
+        assert len(key_list) == len(self.key_sizes)
+        keys = list(map(_get_inner, key_list))
+        result = self.lib.abs_hashmap_contains(self.ptr, *map(_to_void_p, key_list))
         return c_void_p(result)
 
     def delete(self, keys):
         assert len(keys) == len(self.key_sizes)
-        keys = map(_get_inner, keys)
-        self.lib.abs_hashmap_remove(self.ptr, *map(c_void_p, keys))
+        keys = map(lambda k: self.convert_key(k), keys)
+        self.lib.abs_hashmap_remove(self.ptr, *map(_to_void_p, keys))
 
     def __contains__(self, keys):
         if '__iter__' in dir(keys):

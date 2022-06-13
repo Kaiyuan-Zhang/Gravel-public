@@ -15,6 +15,18 @@ static std::unordered_map<void *, std::shared_ptr<Pointee>> data_structure_cache
 static std::unordered_map<void *, std::shared_ptr<z3::model>> models = {};
 static std::unordered_map<void *, std::shared_ptr<Z3Context>> ctxs = {};
 
+
+class ScopedPyGil {
+public:
+    ScopedPyGil(): gstate_(PyGILState_Ensure()) {}
+
+    ~ScopedPyGil() {
+        PyGILState_Release(gstate_);
+    }
+private:
+    PyGILState_STATE gstate_;
+};
+
 bool is_valid_expr(void *expr) {
     return exprs.find(expr) != exprs.end();
 }
@@ -150,6 +162,10 @@ void *bv_urem(void *lhs, void *rhs) {
     BIN_OP_IMPL_BODY(UModExpr, lhs, rhs);
 }
 
+void *bv_and(void *lhs, void *rhs) {
+    BIN_OP_IMPL_BODY(AndExpr, lhs, rhs);
+}
+
 void *bv_concat(void *lhs, void *rhs) {
     BIN_OP_IMPL_BODY(ConcatExpr, lhs, rhs);
 }
@@ -247,6 +263,7 @@ void *ite(void *c, void *t, void *f) {
 }
 
 void *forall(int num_vars, ...) {
+    ScopedPyGil gil;
     va_list vl;
     va_start(vl, num_vars);
     std::vector<ExprPtr> vars;
@@ -469,6 +486,7 @@ void free_element_runner(void *ptr) {
 }
 
 PyObject *run_pkt_handler(void *element_runner) {
+    ScopedPyGil gil;
     auto *runner = (ElementExecutor *)element_runner;
     runner->run();
     PyObject *result = PyList_New(0);
@@ -480,6 +498,7 @@ PyObject *run_pkt_handler(void *element_runner) {
 }
 
 PyObject *get_result_pkt_of_port(void *exec_ctx, int port_idx) {
+    ScopedPyGil gil;
     auto ctx = (ExecContext *)exec_ctx;
     auto &result_pkts = ctx->out_pkts_[port_idx];
     if (result_pkts.size() == 0) {
@@ -510,6 +529,7 @@ void *get_obj_handle_by_off(void *exec_ctx, uint64_t off) {
 }
 
 PyObject *get_abs_obj_type(void *abs_obj) {
+    ScopedPyGil gil;
     std::stringstream ss;
     Pointee *obj = (Pointee *)abs_obj;
     ss << obj->type();
@@ -573,13 +593,13 @@ void *abs_buffer_get(void *abs_buf, void *off, uint64_t num_bytes) {
         return nullptr;
     }
     auto v = result.get_val();
-    
+
     /*
     std::cout << "Abs buffer get: " << v.get() << " "
               << v->type.get()
               << " " << v->type->get_bv_width() << std::endl;
     */
- 
+
     return ret_expr(result.get_val());
 }
 
@@ -596,13 +616,13 @@ void *abs_buffer_get_be(void *abs_buf, void *off, uint64_t num_bytes) {
         return nullptr;
     }
     auto v = result.get_val();
-    
+
     /*
     std::cout << "Abs buffer get: " << v.get() << " "
               << v->type.get()
               << " " << v->type->get_bv_width() << std::endl;
     */
- 
+
     return ret_expr(result.get_val());
 }
 
@@ -680,6 +700,7 @@ void *abs_hashmap_contains(void *abs_map, ...) {
 }
 
 PyObject *abs_hashmap_get(void *abs_map, ...) {
+    ScopedPyGil gil;
     AbstractMap *map = (AbstractMap *)abs_map;
     int n_key = map->key_types.size();
     va_list vl;

@@ -7,10 +7,13 @@ from gravel_spec.click_common import *
 from gravel_spec.click_api import *
 import unittest
 
+import os
+
 
 class ElementVerifyTest(unittest.TestCase):
     def setUp(self):
-        self.lib = load_lib("./build/libcobbleso.so")
+        build_dir = os.environ.get("GRAVEL_BUILD_DIR", "./build")
+        self.lib = load_lib(os.path.join(build_dir, "libcobbleso.so"))
 
     def test_my_ip_rewriter(self):
         rw = MyIPRewriterMod(0)

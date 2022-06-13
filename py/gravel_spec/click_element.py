@@ -48,6 +48,31 @@ class ClickElement(Element):
     def impl_state_equiv(self, lib, spec_state, impl_state):
         raise NotImplementedError()
 
+    def _verify_lemma(self, lib, se, pre, post, lemma_name):
+        target = se.Implies(pre, post)
+        if(self.exists_var_list):
+            ev_list = list(map(get_inner, self.exists_var_list))
+            target = se.Exists(ev_list, target)
+        result = lib.verify_or_ce(get_inner(target))
+        if result is not None:
+            print("Error verifying: {}".format(lemma_name))
+            print("CounterExample:")
+            lib.print_model(c_void_p(result))
+            print("------------------")
+
+            ce = c_void_p(result)
+            print("PRE:")
+            lib.print_expr(get_inner(pre))
+            print("------------------")
+
+            print("POST:")
+            lib.print_expr(get_inner(post))
+            print("==================")
+
+            lib.drop_all_model()
+            raise ElementVerificationError()
+
+
     def verify_pkt_handler(self, lib, ll_file, pkt_format, state_equiv_fn=None, element_name=None, concretization=None):
         verified = True
         state_equiv_func = state_equiv_fn if state_equiv_fn is not None else (lambda l, s, i: self.impl_state_equiv(l, s, i))
@@ -56,6 +81,7 @@ class ClickElement(Element):
             runner = lib.create_element_runner(ll_file.encode('utf-8'), ele_name.encode('utf-8'))
             # runner = lib.create_element_runner_verbose(ll_file.encode('utf-8'), ele_name.encode('utf-8'))
             init_state = lib.get_init_runner_state(runner)
+            lib.set_state_num_in(init_state, self.num_in())
             lib.set_state_num_out(init_state, self.num_out())
             states = lib.run_pkt_handler_py(runner)
 
@@ -72,6 +98,7 @@ class ClickElement(Element):
                 pre_equiv = state_equiv_func(lib, s, init_state)
                 for s_idx, impl_s in enumerate(states):
                     for a_idx, action in enumerate(actions):
+                        # print(f"port {in_port} / {self.num_in()}, s_idx {s_idx} / {len(states)}, a_idx {a_idx} / {len(actions)}")
                         pre_cond = action['pre_cond']
                         out_pkts = action['packets']
                         new_s = action['new_state']
@@ -82,62 +109,51 @@ class ClickElement(Element):
                         pre = lib.bool_and(pre, (impl_in_port == se.BitVecVal(in_port, 32)).inner())
                         pre = lib.bool_and(pre, c_void_p(lib.state_pre_cond(impl_s)))
 
+                        # print("pre_equiv:")
+                        # lib.print_expr(get_inner(pre_equiv))
+                        # print("---------------------------------")
+                        # print("pre_cond:")
+                        # lib.print_expr(get_inner(pre_cond))
+                        # print("---------------------------------")
+                        # print("impl pre_cond:")
+                        # lib.print_expr(get_inner(lib.state_pre_cond(impl_s)))
+                        # print("---------------------------------")
+                        # print("pre all:")
+                        # lib.print_expr(get_inner(pre))
+                        # print("---------------------------------")
+
                         pkt_eq_list = []
-                        for o_port, o_pkt in out_pkts.items():
+                        # for o_port, o_pkt in out_pkts.items():
+                        #     impl_o_pkt = lib.result_pkt_of_port(impl_s, o_port)
+                        #     if impl_o_pkt is None:
+                        #         pkt_eq_list.append(se.Not(o_pkt.not_empty()))
+                        #     else:
+                        #         pkt_eq_list.append(o_pkt.buf_eq(impl_o_pkt))
+                        for o_port in range(self.num_out()):
                             impl_o_pkt = lib.result_pkt_of_port(impl_s, o_port)
                             if impl_o_pkt is None:
-                                pkt_eq_list.append(se.Not(o_pkt.not_empty()))
+                                if o_port in out_pkts:
+                                    pkt_eq_list.append(se.Not(out_pkts[o_port].not_empty()))
                             else:
-                                pkt_eq_list.append(o_pkt.buf_eq(impl_o_pkt))
-                        post = post_equiv
-                        # print("Post:")
-                        # lib.print_expr(get_inner(se.And(*pkt_eq_list)))
+                                if o_port in out_pkts:
+                                    pkt_eq_list.append(out_pkts[o_port].buf_eq(impl_o_pkt))
+                                else:
+                                    pkt_eq_list.append(se.Not(impl_o_pkt.not_empty()))
+
+
+                        # print("pkt eq:")
+                        # for eq in pkt_eq_list:
+                        #     lib.print_expr(get_inner(eq))
                         if len(pkt_eq_list) > 0:
-                            # print("POST:", [post] + pkt_eq_list)
-                            post = se.And(*([post] + pkt_eq_list)).inner()
-                        # print(post)
-                        target = se.Implies(pre, post)
-                        if len(self.exists_var_list) > 0:
-                            ev_list = list(map(get_inner, self.exists_var_list))
-                            target = se.Exists(ev_list, target)
-                            # post = se.Exists(ev_list, post)
-                        # print(target)
-                        result = lib.verify_or_ce(get_inner(target))
-                        # lib.print_expr(target)
-                        if result is not None:
-                            ce = c_void_p(result)
-                            # print("CounterExample:")
-                            # lib.print_model(ce)
-                            # print("Spec pre_cond:")
-                            # lib.print_expr(pre_cond.inner())
-                            # print("Impl pre_cond:")
-                            # lib.print_expr(lib.state_pre_cond(impl_s))
-                            print("PRE:")
-                            lib.print_expr(get_inner(pre))
+                            self._verify_lemma(lib, se, pre, se.And(*pkt_eq_list), "pkt_eq")
+                        # print("pkt eq verified")
+                        # print("------------------------------")
 
-                            print("POST:")
-                            lib.print_expr(get_inner(post))
-
-                            print("PKT_EQ:")
-                            pkt_eq = se.And(*pkt_eq_list)
-                            lib.print_expr(get_inner(pkt_eq))
-                            print("Verify: {}".format(lib.verify_or_ce(get_inner(pkt_eq))))
-
-                            print("State_EQ:")
-                            lib.print_expr(get_inner(post_equiv))
-                            print("Verify: {}".format(lib.verify_or_ce(get_inner(post_equiv))))
-
-                            # off = se.BitVec(fresh_name("pkt_idx"), 64)
-                            # s_byte = out_pkts[0].get_bv_by_off(off, 1)
-                            # i_byte = impl_o_pkt.get_bv_by_off(off, 1)
-                            # eq_cond = se.gen_wrapper(lib.bv_eq(s_byte, i_byte))
-                            # m = lib.verify_or_ce(se.Not(eq_cond).inner())
-                            # if m is not None:
-                            #     print("pkt mismatch:")
-                            #     lib.print_eval_with_model(c_void_p(m), off.inner())
-
-                            lib.drop_all_model()
-                            raise ElementVerificationError()
+                        # print("post_state_equiv:")
+                        # lib.print_expr(get_inner(post_equiv))
+                        self._verify_lemma(lib, se, pre, post_equiv, "state_equiv")
+                        # print("state_equiv verified")
+                        # print("------------------------------")
         except ElementVerificationError:
             verified = False
         lib.free_element_runner(runner)

@@ -71,13 +71,13 @@ class IPFlowID(SpecStruct):
         super().__init__(*args, **kwargs)
 
 
-def get_flowid(p):
+def get_flowid(p, se=z3):
     flow = IPFlowID()
     is_tcp = (p.ip.proto == 6)
     flow.saddr = p.ip.src
     flow.daddr = p.ip.dst
-    flow.sport = If(is_tcp, p.tcp.src, p.udp.src)
-    flow.dport = If(is_tcp, p.tcp.dst, p.udp.dst)
+    flow.sport = se.If(is_tcp, p.tcp.src, p.udp.src)
+    flow.dport = se.If(is_tcp, p.tcp.dst, p.udp.dst)
     return flow
 
 def get_pkt_conds(ps):

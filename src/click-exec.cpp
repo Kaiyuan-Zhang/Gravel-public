@@ -640,7 +640,7 @@ public:
         llvm::Function *fp = inst.getCalledFunction();
         std::string func_name;
         if (fp == NULL) {
-            const llvm::Value *v = inst.getCalledValue()->stripPointerCasts();
+            const llvm::Value *v = inst.getCalledOperand()->stripPointerCasts();
             llvm::StringRef fname = v->getName();
             func_name = fname.str();
         } else {
@@ -699,7 +699,7 @@ public:
             if (conf.log_level == SymExecConf::LOG_VERBOSE) {
                 std::cout << "null fp: " << inst.isInlineAsm() << std::endl;
             }
-            auto val = inst.getCalledValue();
+            auto val = inst.getCalledOperand();
             auto asm_inst = llvm::dyn_cast<llvm::InlineAsm>(val);
             assert(asm_inst != nullptr);
             if (conf.log_level == SymExecConf::LOG_VERBOSE) {
@@ -826,7 +826,6 @@ ElementExecutor::ElementExecutor(const std::string &ll_file, const std::string &
     }
 
     if (element_t_ == nullptr) {
-        std::cout << "Error: could not find element class definition" << std::endl;
     } else {
         if (conf_.log_level == SymExecConf::LOG_VERBOSE) {
             printf("Element State: %p %s\n", element_t_, get_type_name(element_t_).c_str());
@@ -867,6 +866,13 @@ ElementExecutor::ElementExecutor(const std::string &ll_file, const std::string &
     }
     entry_func_name_ = entry;
     entry_func_ = module_->getFunction(entry);
+
+    if (element_t_ == nullptr) {
+        // try to use the first argument of element entry as element type
+        auto func_type = entry_func_->getFunctionType();
+        assert(func_type->params().size() > 0);
+        element_t_ = static_cast<llvm::StructType *>(func_type->params()[0]->getPointerElementType());
+    }
 }
 
 std::shared_ptr<ExecContext> ElementExecutor::create_initial_state() {

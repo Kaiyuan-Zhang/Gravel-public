@@ -6,13 +6,13 @@
 
 
 template<typename PtrT>
-std::shared_ptr<PtrT> get_tmp_obj(const std::string &name, 
+std::shared_ptr<PtrT> get_tmp_obj(const std::string &name,
             std::shared_ptr<ExecContext> state) {
-    static_assert(std::is_base_of<Pointee, PtrT>::value, 
+    static_assert(std::is_base_of<Pointee, PtrT>::value,
             "Not derived from Pointee");
     auto &tmp_data = state->tmp_data;
     auto iter = tmp_data.find(name);
-    
+
     if (iter == tmp_data.end()) {
         return nullptr;
     }
@@ -22,9 +22,9 @@ std::shared_ptr<PtrT> get_tmp_obj(const std::string &name,
 }
 
 template<typename PtrT>
-std::shared_ptr<PtrT> get_state_obj(const std::string &name, 
+std::shared_ptr<PtrT> get_state_obj(const std::string &name,
             std::shared_ptr<ExecContext> state) {
-    static_assert(std::is_base_of<Pointee, PtrT>::value, 
+    static_assert(std::is_base_of<Pointee, PtrT>::value,
             "Not derived from Pointee");
     auto &abs_obj = state->state_.abstract_data;
     auto iter = abs_obj.find(name);
@@ -38,9 +38,9 @@ std::shared_ptr<PtrT> get_state_obj(const std::string &name,
 }
 
 template<typename PtrT>
-std::shared_ptr<PtrT> get_obj(const std::string &name, 
+std::shared_ptr<PtrT> get_obj(const std::string &name,
             std::shared_ptr<ExecContext> state) {
-    static_assert(std::is_base_of<Pointee, PtrT>::value, 
+    static_assert(std::is_base_of<Pointee, PtrT>::value,
             "Not derived from Pointee");
     auto ptr = get_tmp_obj<PtrT>(name, state);
     if (ptr == nullptr) {
@@ -50,11 +50,11 @@ std::shared_ptr<PtrT> get_obj(const std::string &name,
 }
 
 template<typename PtrT>
-std::shared_ptr<PtrT> get_obj(const SymPointer &ptr, 
+std::shared_ptr<PtrT> get_obj(const SymPointer &ptr,
             std::shared_ptr<ExecContext> state) {
     Symbolic::Z3Context ctx;
     auto const_zero = mk_concrete_bv(64, 0);
-    assert(verify_with_z3(ctx, state->get_pre_cond(), 
+    assert(verify_with_z3(ctx, state->get_pre_cond(),
                 mk_expr_ptr(EqExpr, {ptr.offset, const_zero})));
     return get_obj<PtrT>(ptr.pointer_base, state);
 }
@@ -63,8 +63,8 @@ bool PktUniqueify::match(const std::string &fn) const {
     return fn == "Packet::uniqueify()";
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-PktUniqueify::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+PktUniqueify::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -73,14 +73,14 @@ PktUniqueify::call(const std::string &fn,
     return {state};
 }
 
-    
+
 bool PktIPHeader::match(const std::string &fn) const {
     return is_prefix(fn, "Packet::ip_header")
         || is_prefix(fn, "WritablePacket::ip_header");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-PktIPHeader::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+PktIPHeader::call(const std::string &fn,
     const std::vector<RegValue> &params,
     std::shared_ptr<ExecContext> state,
     const std::string &dst_reg) {
@@ -98,8 +98,8 @@ bool PktGeneral::match(const std::string &fn) const {
         || is_prefix(fn, "WritablePacket::");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-PktGeneral::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+PktGeneral::call(const std::string &fn,
                  const std::vector<RegValue> &params,
                  std::shared_ptr<ExecContext> state,
                  const std::string &dst_reg) {
@@ -115,7 +115,14 @@ PktGeneral::call(const std::string &fn,
         auto pkt_ptr = params[0].get_ptr();
         pkt_obj = get_obj<Packet>(pkt_ptr, state);
     }
-    if (is_prefix(method_name, "ip_header")) {
+    if (is_prefix(method_name, "ether_header")) {
+        SymPointer ptr;
+        ptr.pointer_base = pkt_obj->content_buf_name;
+        ptr.offset = mk_expr_ptr(ConcreteBv, 64, 0);
+        state->set_reg_val(dst_reg, RegValue{ptr});
+        state->inst_iter_++;
+        return {state};
+    } else if (is_prefix(method_name, "ip_header")) {
         SymPointer ptr;
         ptr.pointer_base = pkt_obj->content_buf_name;
         ptr.offset = mk_expr_ptr(ConcreteBv, 64, 14);
@@ -248,7 +255,18 @@ PktGeneral::call(const std::string &fn,
         auto np_name = state->name_gen->gen("new_pkt");
         auto new_pkt = std::make_shared<Packet>(np_name, state);
         state->tmp_data.insert({np_name, new_pkt});
-        
+
+        SymPointer pkt_ptr;
+        pkt_ptr.pointer_base = np_name;
+        pkt_ptr.offset = mk_concrete_bv(64, 0);
+        state->set_reg_val(dst_reg, RegValue{pkt_ptr});
+        state->inst_iter_++;
+        return {state};
+    } else if (method_name == "clone()") {
+        auto np_name = state->name_gen->gen("new_pkt");
+        auto new_pkt = pkt_obj->clone_pkt(np_name, state);
+        state->tmp_data.insert({np_name, new_pkt});
+
         SymPointer pkt_ptr;
         pkt_ptr.pointer_base = np_name;
         pkt_ptr.offset = mk_concrete_bv(64, 0);
@@ -264,8 +282,8 @@ bool ElementFuncs::match(const std::string &fn) const {
     return is_prefix(fn, "Element::");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-ElementFuncs::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+ElementFuncs::call(const std::string &fn,
                    const std::vector<RegValue> &params,
                    std::shared_ptr<ExecContext> state,
                    const std::string &dst_reg) {
@@ -277,7 +295,7 @@ ElementFuncs::call(const std::string &fn,
     bool is_push = false;
     std::shared_ptr<Packet> pkt_obj = nullptr;
     Symbolic::ExprPtr out_port_idx = nullptr;
-    
+
     if (method_name == "checked_output_push(int, Packet*) const") {
         // TODO: implement this
         out_port_idx = params[1].get_val()->simplify();
@@ -299,6 +317,10 @@ ElementFuncs::call(const std::string &fn,
         is_push = true;
     } else if (method_name == "name() const") {
         state->inst_iter_++;
+        return {state};
+    } else if (method_name == "noutputs() const") {
+        state->inst_iter_++;
+        state->set_reg_val(dst_reg, RegValue{mk_concrete_bv(32, state->state_.num_out)});
         return {state};
     }
 
@@ -329,8 +351,8 @@ bool VectorOps::match(const std::string &fn) const {
     return (is_prefix(template_args[0], "Vector::"));
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-VectorOps::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+VectorOps::call(const std::string &fn,
                 const std::vector<RegValue> &params,
                 std::shared_ptr<ExecContext> state,
                 const std::string &dst_reg) {
@@ -357,7 +379,7 @@ VectorOps::call(const std::string &fn,
     } else {
         assert(false && "could not find where is the vector");
     }
-    
+
     auto after_colon = fn.find("::");
     auto op_name = fn.substr(after_colon + 2);
     if (op_name == "operator[](int)") {
@@ -413,8 +435,8 @@ bool HashMapOps::match(const std::string &fn) const {
     return (is_prefix(template_args[0], "HashMap::"));
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-HashMapOps::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+HashMapOps::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -427,7 +449,7 @@ HashMapOps::call(const std::string &fn,
     Z3Context ctx;
     auto const_zero = mk_concrete_bv(64, 0);
     auto map_ptr = params[0].get_ptr();
-    if (!verify_with_z3(ctx, state->get_pre_cond(), 
+    if (!verify_with_z3(ctx, state->get_pre_cond(),
                 mk_expr_ptr(EqExpr, {map_ptr.offset, const_zero}))) {
         auto off = map_ptr.offset->simplify();
         if (off->is_symbolic()) {
@@ -492,7 +514,7 @@ HashMapOps::call(const std::string &fn,
             }
             m_obj->set_vals(keys, new_vals);
         };
-        
+
         SymPointer ptr;
         ptr.pointer_base = buf_name;
         ptr.offset = mk_concrete_bv(64, 0);
@@ -528,7 +550,7 @@ HashMapOps::call(const std::string &fn,
             keys.push_back(k);
             off = mk_expr_ptr(AddExpr, {off, mk_concrete_bv(64, key_size_bytes)});
         }
-        
+
         off = const_zero;
         for (int i = 0; i < map_obj->val_types.size(); i++) {
             auto val_size_bits = map_obj->val_types[i]->get_bv_width();
@@ -543,6 +565,27 @@ HashMapOps::call(const std::string &fn,
         map_obj->set_vals(keys, vals);
         state->inst_iter_++;
         return {state};
+    } else if (is_prefix(method_name, "erase(")) {
+        auto key_buf_ptr = get_obj<Buffer>(params[1].get_ptr(), state);
+
+        std::vector<ExprPtr> keys;
+        std::vector<ExprPtr> vals;
+        auto off = const_zero;
+
+        for (int i = 0; i < map_obj->key_types.size(); i++) {
+            auto key_size_bits = map_obj->key_types[i]->get_bv_width();
+            assert(key_size_bits % 8 == 0);
+            auto key_size_bytes = key_size_bits / 8;
+
+            auto k = key_buf_ptr->load_be(off, key_size_bytes).get_val();
+            keys.push_back(k);
+            off = mk_expr_ptr(AddExpr, {off, mk_concrete_bv(64, key_size_bytes)});
+        }
+
+        map_obj->delete_val(keys);
+        state->set_reg_val(dst_reg, RegValue{mk_concrete_bv(1, 1)});
+        state->inst_iter_++;
+        return {state};
     }
 
     assert(false && "unknown HashMap operation");
@@ -554,8 +597,8 @@ bool ByteRotationFunc::match(const std::string &fn) const {
         || is_prefix(fn, "bswap $0"));
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-ByteRotationFunc::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+ByteRotationFunc::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -564,7 +607,7 @@ ByteRotationFunc::call(const std::string &fn,
     auto source = params[0].get_val();
     auto num_bits = source->type->get_bv_width();
     assert(num_bits % 8 == 0);
-    
+
     auto num_bytes = num_bits / 8;
     std::vector<ExprPtr> bytes;
     for (int i = 0; i < num_bytes; i++) {
@@ -588,8 +631,8 @@ bool IPFlowIDConstr::match(const std::string &fn) const {
     return (fn == "IPFlowID::IPFlowID(Packet const*, bool)");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-IPFlowIDConstr::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+IPFlowIDConstr::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -599,7 +642,7 @@ IPFlowIDConstr::call(const std::string &fn,
     // check if offset is zero
     Symbolic::Z3Context ctx;
     auto const_zero = mk_concrete_bv(64, 0);
-    assert(verify_with_z3(ctx, state->get_pre_cond(), 
+    assert(verify_with_z3(ctx, state->get_pre_cond(),
                 mk_expr_ptr(EqExpr, {flow_id_ptr.offset, const_zero})));
     assert(verify_with_z3(ctx, state->get_pre_cond(),
                 mk_expr_ptr(EqExpr, {pkt_ptr.offset, const_zero})));
@@ -635,8 +678,8 @@ bool LLVMMemcpy::match(const std::string &fn) const {
         || is_prefix(fn, "llvm.memmove");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-LLVMMemcpy::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+LLVMMemcpy::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -684,8 +727,8 @@ bool LLVMMemset::match(const std::string &fn) const {
     return is_prefix(fn, "llvm.memset");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-LLVMMemset::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+LLVMMemset::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -727,8 +770,8 @@ bool LLVMMemcmp::match(const std::string &fn) const {
     return is_prefix(fn, "memcmp");
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-LLVMMemcmp::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+LLVMMemcmp::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -765,19 +808,19 @@ bool ClickLibFunc::match(const std::string &fn) const {
         "Timestamp::assign_now()",
         "clock_gettime",
         "click_chatter",
-        "find", 
+        "find",
         "IPAddress* find<IPAddress>(IPAddress*, IPAddress*, IPAddress const&)",
         "IPAddress const* find<IPAddress>(IPAddress const*, IPAddress const*, IPAddress const&)",
         "click_in_cksum",
-        "click_in_cksum_pseudohdr_hard", 
+        "click_in_cksum_pseudohdr_hard",
         "click_in_cksum_pseudohdr_raw",
         "in6_fast_cksum",
     };
     return fn_set.find(fn) != fn_set.end();
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-ClickLibFunc::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+ClickLibFunc::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -812,8 +855,8 @@ bool CheckIPHdrHelper::match(const std::string &fn) const {
     return fn_set.find(fn) != fn_set.end();
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-CheckIPHdrHelper::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+CheckIPHdrHelper::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {
@@ -826,8 +869,8 @@ bool IP6Helper::match(const std::string &fn) const {
     return fn == "IP6Address::ip4_address() const";
 }
 
-std::vector<std::shared_ptr<ExecContext>> 
-IP6Helper::call(const std::string &fn, 
+std::vector<std::shared_ptr<ExecContext>>
+IP6Helper::call(const std::string &fn,
         const std::vector<RegValue> &params,
         std::shared_ptr<ExecContext> state,
         const std::string &dst_reg) {

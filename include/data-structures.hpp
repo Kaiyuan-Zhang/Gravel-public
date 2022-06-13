@@ -187,7 +187,10 @@ public:
 
 class Packet : public AbstractType {
 public:
+    Packet() {}
     Packet(const std::string &name, std::shared_ptr<ExecContext> state);
+
+    std::shared_ptr<Packet> clone_pkt(const std::string& new_name, std::shared_ptr<ExecContext> state);
 
     virtual RegValue handle_req(const std::string &method_name, 
             const std::vector<RegValue> &args, 

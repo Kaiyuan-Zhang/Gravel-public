@@ -38,10 +38,10 @@ class Bridge(ConfigVerifyTask, unittest.TestCase):
                                   ('mapping', 30)])
         parser.add_header('payload', [('data', 1500)])
 
-        tcp_path = ParserEdge('ether') >> (('ether_type', 'eq', 0x0800), 'ip4') \
+        tcp_path = ParserEdge('ether') >> (('ether_type', 'eq', 0x0800), 'ip') \
                    >> (('proto', 'eq', 6), 'tcp')  >> (('always'), 'ftp') >> (('always'), 'payload')
         arp_path = ParserEdge('ether') >> (('ether_type', 'eq', 0x0806), 'arp')
-        udp_path = ParserEdge('ip4') >> (('proto', 'eq', 17), 'udp')  >> (('always'), 'payload')
+        udp_path = ParserEdge('ip') >> (('proto', 'eq', 17), 'udp')  >> (('always'), 'payload')
 
         return ClickConfig(elements, paths.edges(), parser)
 

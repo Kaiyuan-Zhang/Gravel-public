@@ -76,7 +76,7 @@ class EtherSwitch(ClickElement):
 
     def process_packet(self, s, p, in_port, se=z3):
         actions = []
-        
+
         src = p.ether.src
         dst = p.ether.dst
         has_mapping = s.ether_map.has_key(dst)
@@ -87,10 +87,15 @@ class EtherSwitch(ClickElement):
         broadcast = {}
         #print(se.simplify(updated.ether_map.has_key(src)))
         for i in range(self.num_out_ports):
-            actions += Action(And(has_mapping, dst_port == i),
+            actions += Action(se.And(has_mapping, dst_port == i),
                               {i : p}, updated)
             broadcast[i] = p.copy()
-        actions += Action(Not(has_mapping), broadcast, updated)
+        # broadcast
+        for i in range(self.num_out_ports):
+            b = broadcast.copy()
+            del b[i]
+            actions += Action(se.And(se.Not(has_mapping), in_port == i),
+                              b, updated)
         return actions
 
     def state_inv(self, s, se=z3):
@@ -98,6 +103,16 @@ class EtherSwitch(ClickElement):
         bound = se.ULT(s.ether_map[src][0], self.num_out_ports)
         return se.ForAll([src], Implies(s.ether_map.has_key(src),
                                         bound))
+
+    def impl_state_equiv(self, lib, spec_state, impl_state):
+        se = CobbleSymGen(lib)
+        ether_map = lib.get_obj_handle_by_off(impl_state, 112)
+        def ether_addr_eq(spec_k, impl_k):
+            impl_val = se.bv_extract_from_top(impl_k[0], 0, 48)
+            return spec_k[0] == impl_val
+        return spec_state.ether_map.map_eq(ether_map, impl_key_sz=[48],
+                key_eq_func=ether_addr_eq,
+                vals_eq_func=lambda s, i: se.bv_bswap(se.bv_extract_from_top(i[0], 0, 32)) == s[0])
 
 class ARPQuerier(ClickElement):
     num_in_ports = 2
@@ -143,7 +158,7 @@ class IPRewriteEntry(SpecStruct):
     _fields = [('saddr', sizeof(c_int)),
                ('daddr', sizeof(c_int)),
                ('sport', sizeof(c_short)),
-               ('dport', sizeof(c_short)), 
+               ('dport', sizeof(c_short)),
                ('output', sizeof(c_int))]
     _struct_name = 'IPRewriteEntry'
 
@@ -207,7 +222,7 @@ class IPRewriter(ClickElement):
             new_flow.dport = dport if spec.args[3] is not None else se.If(is_tcp, p.tcp.dst, p.udp.dst)
             new_flow.output = spec.foutput
 
-            new_flow_rev = IPRewriteEntry() 
+            new_flow_rev = IPRewriteEntry()
             new_flow_rev.daddr = spec.args[0] if spec.args[0] is not None else p.ip.src
             new_flow_rev.saddr = spec.args[2] if spec.args[2] is not None else p.ip.dst
             new_flow_rev.dport = sport if spec.args[1] is not None else se.If(is_tcp, p.tcp.src, p.udp.src)
@@ -235,6 +250,7 @@ class IPRewriter(ClickElement):
 class ProxyRewriter(ClickElement):
     num_in_ports = 1
     num_out_ports = 2
+
     udp_map = ClickMap(IPFlowID, IPRewriteEntry)
     tcp_map = ClickMap(IPFlowID, IPRewriteEntry)
 
@@ -267,57 +283,52 @@ class ProxyRewriter(ClickElement):
         p.ip.dst = entry.daddr
         p.udp.src = entry.sport
         p.udp.dst = entry.dport
-    
-    def process_packet(self, s, p, in_port, se=z3):
+
+    def process_helper(self, s, p, in_port, pre_cond, map_getter, rewrite_fn, se=z3):
+        m = map_getter(s)
         actions = []
-        is_tcp = (p.ip.proto == 6)
-        is_udp = (p.ip.proto == 17)
-
-        flow_id = get_flowid(p)
-        m = se.If(is_tcp, s.tcp_map, s.udp_map)
-        has_mapping = m.has_key(flow_id)
-        translated_tcp = p.copy()
-        translated_udp = p.copy()
+        flow_id = get_flowid(p, se)
+        has_mapping = m.has_key(flow_id.to_tuple())
+        translated_pkt = p.copy()
         rewritten_flow = IPRewriteEntry.from_tuple(m[flow_id.to_tuple()])
-
-        self.rewrite_tcp(translated_tcp, rewritten_flow)
-        self.rewrite_udp(translated_udp, rewritten_flow)
-
+        rewrite_fn(translated_pkt, rewritten_flow)
         for i in range(self.num_out_ports):
-            actions += Action(And(has_mapping, rewritten_flow.output == i, is_tcp),
-                              {i: translated_tcp}, s)
-            actions += Action(And(has_mapping, rewritten_flow.output == i, is_udp),
-                              {i: translated_udp}, s)
-
-        port = fresh_bv('port', 16)
+            actions += Action(se.And(has_mapping, rewritten_flow.output == i, pre_cond),
+                              {i: translated_pkt}, s)
+        port = self.exists_bv('port', 16, se=se)
         new_flow = IPRewriteEntry()
         new_flow.saddr = se.BitVecVal(0xc0c0c0c0, 32)
         new_flow.daddr = se.BitVecVal(0xa0a0a0a0, 32)
         new_flow.sport = port
         new_flow.dport = se.BitVecVal(8000, 16)
         new_flow.output = se.BitVecVal(0, 32)
-        ns_tcp = s.copy()
-        ns_tcp.tcp_map[flow_id.to_tuple()] = new_flow.to_tuple()
-        ns_udp = s.copy()
-        ns_udp.udp_map[flow_id.to_tuple()] = new_flow.to_tuple()
+        ns = s.copy()
+        new_m = map_getter(ns)
+        new_m[flow_id.to_tuple()] = new_flow.to_tuple()
 
         rev_k, rev_v = self.rev_entry(flow_id, new_flow, se)
-        ns_tcp.tcp_map[rev_k.to_tuple()] = rev_v.to_tuple()
-        ns_udp.udp_map[rev_k.to_tuple()] = rev_v.to_tuple()
+        new_m[rev_k.to_tuple()] = rev_v.to_tuple()
 
-        could_alloc = And(m.has_key(flow_id.to_tuple()),
-                          m.has_key(rev_k.to_tuple()))
-        
+        could_alloc = se.And(m.has_key(flow_id.to_tuple()),
+                             m.has_key(rev_k.to_tuple()))
+
         np = p.copy()
-        self.rewrite_tcp(np, new_flow)
-        actions += Action(And(Not(has_mapping), in_port == 0, is_tcp, could_alloc), 
-                          {0: np}, ns_tcp)
-        np = p.copy()
-        self.rewrite_udp(np, new_flow)
-        actions += Action(And(Not(has_mapping), in_port == 0, is_udp, could_alloc), 
-                          {0: np}, ns_udp)
-        
+        rewrite_fn(np, new_flow)
+        actions += Action(se.And(se.Not(has_mapping), in_port == 0, pre_cond, could_alloc),
+                          {0: np}, ns)
         return actions
+
+
+    def process_packet(self, s, p, in_port, se=z3):
+        is_tcp = (p.ip.proto == 6)
+        is_udp = (p.ip.proto == 17)
+
+        actions_tcp = self.process_helper(s, p, in_port, is_tcp, lambda s: s.tcp_map,
+                lambda p, e: self.rewrite_tcp(p, e), se=se)
+        actions_udp = self.process_helper(s, p, in_port, is_udp, lambda s: s.udp_map,
+                lambda p, e: self.rewrite_udp(p, e), se=se)
+
+        return actions_tcp + actions_udp
 
     def state_inv(self, s, se=z3):
         key = IPFlowID()
@@ -336,13 +347,41 @@ class ProxyRewriter(ClickElement):
             k2.daddr = val.saddr
             k2.dport = val.sport
             rev_val = IPRewriteEntry.from_tuple(m[k2.to_tuple()])
-            conds.append(se.ForAll(list(key.to_tuple()), 
-                                se.Implies(m.has_key(key), 
-                                    se.And(m.has_key(k2), 
-                                        flow_rev_eq(rev_val, key), 
+            conds.append(se.ForAll(list(key.to_tuple()),
+                                se.Implies(m.has_key(key),
+                                    se.And(m.has_key(k2),
+                                        flow_rev_eq(rev_val, key),
                                         se.Or(val.output == 0, val.output == 1),
                                         val.output == 1 - rev_val.output))))
         return And(*conds)
+    
+    def impl_state_equiv(self, lib, spec_s, impl_s):
+        se = CobbleSymGen(lib)
+        conds = []
+        udp_map = lib.get_obj_handle_by_off(impl_s, 112)
+        tcp_map = lib.get_obj_handle_by_off(impl_s, 168)
+        def flow_id_eq(spec_id, impl_id):
+            impl_saddr = se.bv_bswap(se.bv_extract_from_top(impl_id[0], 0, 32))
+            impl_daddr = se.bv_bswap(se.bv_extract_from_top(impl_id[0], 32, 64))
+            impl_sport = se.bv_bswap(se.bv_extract_from_top(impl_id[0], 64, 80))
+            impl_dport = se.bv_bswap(se.bv_extract_from_top(impl_id[0], 80, 96))
+            return se.And(impl_saddr == spec_id[0], impl_daddr == spec_id[1],
+                          impl_sport == spec_id[2], impl_dport == spec_id[3])
+
+        def rewrite_entry_eq(spec_entry, impl_entry):
+            impl_saddr = se.bv_bswap(se.bv_extract_from_top(impl_entry[0], 0, 32))
+            impl_daddr = se.bv_bswap(se.bv_extract_from_top(impl_entry[0], 32, 64))
+            impl_sport = se.bv_bswap(se.bv_extract_from_top(impl_entry[0], 64, 80))
+            impl_dport = se.bv_bswap(se.bv_extract_from_top(impl_entry[0], 80, 96))
+            impl_outport = se.bv_bswap(se.bv_extract_from_top(impl_entry[0], 96, 128))
+            return se.And(impl_saddr == spec_entry[0], impl_daddr == spec_entry[1],
+                          impl_sport == spec_entry[2], impl_dport == spec_entry[3],
+                          impl_outport == spec_entry[4])
+        conds.append(spec_s.udp_map.map_eq(udp_map, impl_key_sz=[96],
+            key_eq_func=flow_id_eq, vals_eq_func=rewrite_entry_eq))
+        conds.append(spec_s.tcp_map.map_eq(tcp_map, impl_key_sz=[96],
+            key_eq_func=flow_id_eq, vals_eq_func=rewrite_entry_eq))
+        return reduce(lib.bool_and, map(get_inner, conds))
 
 
 class MyIPRewriter(ClickElement):
@@ -392,17 +431,17 @@ class MyIPRewriter(ClickElement):
         is_udp = (p.ip.proto == 17)
         tcp_id = self.pkt_tcp_flow_id(p).to_expr()
         udp_id = self.pkt_udp_flow_id(p).to_expr()
-        
+
         m = se.If(is_tcp, old.tcp_map, old.udp_map)
         flow_id = se.If(is_tcp, tcp_id, udp_id)
-        
+
         have_mapping = m.has_key(flow_id)
         translated_tcp = p.copy()
         translated_udp = p.copy()
         rewritten_flow = IPFlowID.from_expr(m[flow_id][0])
         self.tcp_flow_apply(rewritten_flow, translated_tcp)
         self.udp_flow_apply(rewritten_flow, translated_udp)
-        
+
         actions += Action(And(in_port == 0, is_tcp, have_mapping),
                           {0: translated_tcp},
                           old)
@@ -412,7 +451,7 @@ class MyIPRewriter(ClickElement):
         actions += Action(And(in_port == 2, is_tcp, have_mapping),
                           {1: translated_tcp},
                           old)
-        
+
         return actions
 
 
@@ -434,10 +473,10 @@ class MyIPRewriterMod(ClickElement):
     map_extern = ClickMap(NatExternKey, IPFlowID)
     map_intern = ClickMap(NatInternKey, IPFlowID)
     curr_time = ClickVal(c_ulonglong)
-    
+
     def __init__(self, extern_ip):
         pass
-    
+
     @staticmethod
     def extern_tcp_rewrite(flow, p):
         pkt = p.copy()
@@ -479,6 +518,7 @@ class MyIPRewriterMod(ClickElement):
             impl_fields.append(se.bv_bswap(se.bv_extract_from_top(impl_k[0], 0, 16)))
             impl_fields.append(se.bv_extract_from_top(impl_k[0], 16, 16 + 8))
             impl_v = se.Concat(*impl_fields)
+            # return se.And(impl_fields[0] == spec_k[0], impl_fields[1] == spec_k[1])
             return lib.bv_eq(spec_bv, impl_v.inner())
 
         def intern_key_eq(spec_k, impl_k):
@@ -486,7 +526,8 @@ class MyIPRewriterMod(ClickElement):
             impl_fields.append(se.bv_bswap(se.bv_extract_from_top(impl_k[0], 0, 32)))
             impl_fields.append(se.bv_bswap(se.bv_extract_from_top(impl_k[0], 32, 32 + 16)))
             impl_fields.append(se.bv_extract_from_top(impl_k[0], 32 + 16, 32 + 16 + 8))
-            return se.And(*map(lambda x, y: x == y, impl_fields, spec_k)).inner()
+            # return se.And(*map(lambda x, y: x == y, impl_fields, spec_k)).inner()
+            return se.Concat(*spec_k) == se.Concat(*impl_fields)
 
         def extern_val_eq(spec_val, impl_val):
             daddr = se.bv_bswap(se.bv_extract_from_top(impl_val[0], 32, 64))
@@ -494,7 +535,7 @@ class MyIPRewriterMod(ClickElement):
             spec_daddr = spec_val[1]
             spec_dport = spec_val[3]
             return se.And(daddr == spec_daddr, dport == spec_dport)
-        
+
         def intern_val_eq(spec_val, impl_val):
             saddr = se.bv_bswap(se.bv_extract_from_top(impl_val[0], 0, 32))
             sport = se.bv_bswap(se.bv_extract_from_top(impl_val[0], 64, 64 + 16))
@@ -578,7 +619,7 @@ class MyIPRewriterMod(ClickElement):
         actions += Action(se.And(se.Not(do_hairpin), se.Not(have_mapping), in_port == 0, could_alloc, is_udp),
                           {0: self.intern_udp_rewrite(int_flow, p)},
                           ns)
-        
+
         return actions
 
     def handle_event(self, s, event, *params):
@@ -601,11 +642,11 @@ class MyIPRewriterMod(ClickElement):
         int_val = self.NatExternKey()
         int_val.port = int_flow.sport
         int_val.protocol = ext_id.protocol
-        
+
         ext_map = s.map_extern
         int_map = s.map_intern
         return ForAll([ext_id.port, ext_id.protocol,
-                       int_id.addr, int_id.port], 
+                       int_id.addr, int_id.port],
                       And(Implies(ext_map.has_key(ext_id), int_map.has_key(ext_val)),
                           Implies(int_map.has_key(int_id), ext_map.has_key(int_val)),
                           Implies(ext_map.has_key(ext_id),
@@ -613,7 +654,7 @@ class MyIPRewriterMod(ClickElement):
                           Implies(int_map.has_key(int_id),
                                   And(IPFlowID.from_tuple(ext_map[int_val.to_tuple()]).dport == int_id.port,
                                       IPFlowID.from_tuple(ext_map[int_val.to_tuple()]).daddr == int_id.addr))))
-        
+
 
 
 class TCPRewriter(ClickElement):

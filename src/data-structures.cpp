@@ -354,6 +354,26 @@ Packet::Packet(const std::string &n, std::shared_ptr<ExecContext> state) {
     state->tmp_data.insert({anno_buf_name, anno_buf});
 }
 
+std::shared_ptr<Packet> Packet::clone_pkt(const std::string& new_name, std::shared_ptr<ExecContext> state) {
+    std::shared_ptr<Packet> new_pkt = std::make_shared<Packet>();
+    new_pkt->name = new_name;
+    new_pkt->content_buf_name = new_name + "!content";
+    new_pkt->anno_buf_name = name + "!anno";
+    new_pkt->len = len;
+
+    auto old_pkt_content = std::dynamic_pointer_cast<Buffer>(state->tmp_data[content_buf_name]);
+    auto new_pkt_content = std::make_shared<Buffer>(*old_pkt_content);
+    new_pkt_content->name = new_pkt->content_buf_name;
+
+    auto old_anno = std::dynamic_pointer_cast<Buffer>(state->tmp_data[anno_buf_name]);
+    auto new_anno = std::make_shared<Buffer>(*old_anno);
+    new_anno->name = new_pkt->anno_buf_name;
+
+    state->tmp_data.insert({new_pkt->content_buf_name, new_pkt_content});
+    state->tmp_data.insert({new_pkt->anno_buf_name, new_anno});
+    return new_pkt;
+}
+
 void Packet::print(std::ostream &os) const {
     os << "(Packet " << name << ")";
 }

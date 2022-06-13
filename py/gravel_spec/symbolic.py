@@ -47,6 +47,9 @@ class CobbleSymVal(object):
     def __mod__(self, other):
         return self.bin_op_generic(other, self.lib.bv_mod)
 
+    def __and__(self, other):
+        return self.bin_op_generic(other, self.lib.bv_and)
+
     def __lt__(self, other):
         return self.bin_op_generic(other, self.lib.bv_lt)
 
@@ -153,6 +156,9 @@ class CobbleSymGen(object):
         lhs = get_inner(lhs)
         rhs = get_inner(rhs)
         return self.gen_wrapper(self.lib.bv_ugt(lhs, rhs))
+
+    def URem(self, a, b):
+        return self.gen_wrapper(self.lib.bv_urem(get_inner(a), get_inner(b)))
 
     def ForAll(self, var_list, expr):
         return self.gen_wrapper(self.lib.forall(len(var_list), *map(get_inner, var_list), get_inner(expr)))

@@ -24,6 +24,16 @@ specs/ High-level and element-level specifications for our example middleboxes
 ### System Requirements
 Gravel requires Boost, LLVM, and Z3. The current version works with both LLVM-9.0 and LLVM-6.0
 
+### Using Gravel's Docker Image
+This repository also includes a `Dockerfile` that helps setting up Gravel's development environment. To use it, run:
+```
+docker build -t gravel .
+```
+This command will take a while to install / compile all of Gravel's dependencies. After the image is built, one could use the following command to run a container:
+```
+docker run -it -v $(pwd):/gravel --workdir /gravel gravel 
+```
+
 ### High-level verifier
 The high-level verifier is implemented in Python and therefore does not require compiling. To import it into your own Python program, update the PYTHONPATH by
 ```bash
